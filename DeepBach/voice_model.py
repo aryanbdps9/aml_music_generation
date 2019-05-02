@@ -3,7 +3,7 @@
 """
 
 import random
-
+import numpy as np
 import torch
 from DatasetManager.chorale_dataset import ChoraleDataset
 from DeepBach.helpers import cuda_variable, init_hidden
@@ -106,6 +106,7 @@ class VoiceModel(nn.Module):
         #     nn.ReLU(),
         # )
         self.conv = get_c_kernel(self.num_voices+self.num_metas)
+        self.num_missing = 5
 
         # self.conv_glob = nn.Sequential(
         #     nn.Conv2d()
@@ -181,11 +182,21 @@ class VoiceModel(nn.Module):
         # bs X (2*120)
         # emb_size = (ne*nv+me*nm) # 120
         strip2 = torch.reshape(strip, (-1, self.num_voices+self.num_metas, self.note_embedding_dim, ntsteps))
-        # conv_out = self.conv(sandwich).view(-1, 240)
         # print("strip2", strip2.size())
+        for layer_id in range(self.num_layers):
+            num_change = self.num_missing
+            num_change = random.randint(num_change // 2, int(num_change * 1.5))
+            choices = np.random.choice(ntsteps,size=num_change,replace=False).tolist()
+            for choice in choices:
+                strip2[:, layer_id, :, choice] = torch.randn(batch_size, self.note_embedding_dim).cuda()
+        
+
+
+        # conv_out = self.conv(sandwich).view(-1, 240)
         conv_out = self.conv(strip2) # n*e X 3 X blah
         # print("conv_out", conv_out.size())
         conv_out = torch.mean(conv_out, -1).view(-1, conv_out.size(1)*conv_out.size(2))
+        
         # conv_out = self.conv(strip).view(-1, 240)
 
         # bs X 1 X cnt_size
