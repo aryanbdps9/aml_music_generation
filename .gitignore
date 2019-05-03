@@ -106,4 +106,4 @@ DeepBach/datasets/custom_dataset/*.pickle
 DatasetManager/dataset_cache/
 models/
 .vscode/
-music_generated/
+#music_generated/
