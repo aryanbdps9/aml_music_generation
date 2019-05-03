@@ -9,11 +9,16 @@ class self_attn_mini(nn.Module):
 		self.query = nn.Linear(input_size, input_size, bias=False)
 		self.value = nn.Linear(input_size, input_size, bias=False)
 		self.softmax = nn.Softmax(dim=2)
-	def forward(self, input):
+		self.activate_cuda = torch.cuda.is_available()
+	def forward(self, input, pos_enc=None):
 		q = self.query(input)
 		k = self.key(input)
 		v = self.value(input)
-		wt_mat = q @ torch.transpose(k,1,2) / self.input_size
+		if pos_enc is not None:
+			wt_mat = q @ torch.transpose(k+pos_enc, 1, 2)
+		else:
+			wt_mat = q @ torch.transpose(k,1,2)
+		wt_mat = wt_mat / (self.input_size ** 0.5)
 		wt_mat_softmaxed = self.softmax(wt_mat)
 		transformed = wt_mat_softmaxed @ v
 		return transformed
@@ -29,17 +34,23 @@ class self_attn_monster(nn.Module):
 		self.sam = self_attn_mini(input_size)
 		self.input_size = input_size
 		self.pos_embedding = nn.Embedding(63, input_size)
+		self.activate_cuda = torch.cuda.is_available()
 	def forward(self, input, lr='l'):
 		bs = input.size(0)
 		ntsteps = input.size(1)
 		if lr == 'l':
 			indices = torch.arange(ntsteps) + 31 - ntsteps
+			if self.activate_cuda:
+				indices = indices.cuda()
 		else:
 			indices = torch.arange(ntsteps) + 32
+			if self.activate_cuda:
+				indices = indices.cuda()
+
 		positional_emb = self.pos_embedding(indices).unsqueeze(0).repeat(bs, 1,1)
-		pos_inp = positional_emb + input
+		pos_inp = input# + positional_emb
 		for li, layer in enumerate(self.feed_fwds):
-			pos_inp = self.sam(pos_inp)
+			pos_inp = self.sam(pos_inp, positional_emb)
 			pos_inp = layer(pos_inp)
 			pos_inp = self.activation(pos_inp)
 		return pos_inp

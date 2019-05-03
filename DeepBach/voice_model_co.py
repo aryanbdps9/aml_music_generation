@@ -9,25 +9,24 @@ from DatasetManager.chorale_dataset import ChoraleDataset
 from DeepBach.helpers import cuda_variable, init_hidden
 
 from torch import nn
-import DeepBach.attention as attention
+
 from DeepBach.data_utils import reverse_tensor, mask_entry
 
 def get_c_kernel(n):
     # n X 64 X 32
     e = 64
-    activ_fn = nn.LeakyReLU()
     res = nn.Sequential(
         nn.Conv2d(n, 16, kernel_size=(5, 5)), # 16 X 60 X 28
-        activ_fn,
+        nn.ReLU(),
         nn.MaxPool2d((2, 2), stride=2), # 16 X 30 X 14
         nn.Conv2d(16, 32, kernel_size=(5, 5), padding=(1, 1)), # 32 X 28 X 12
-        activ_fn,
+        nn.ReLU(),
         nn.MaxPool2d((2, 2), stride=2), # 32 X 14 X 6
         nn.Conv2d(32, 64, kernel_size=(3, 3)), # 64 X 12 X 4
-        activ_fn,
+        nn.ReLU(),
         nn.MaxPool2d((2, 2), stride=1), # 64 X 11 X 3
         nn.Conv2d(64, n*e, kernel_size=(5, 3), stride=(3, 1)), # n*e X 3 X 1
-        activ_fn,
+        nn.ReLU(),
     )
     return res
 
@@ -43,6 +42,7 @@ class VoiceModel(nn.Module):
                  hidden_size_linear=200
                  ):
         super(VoiceModel, self).__init__()
+        assert note_embedding_dim == meta_embedding_dim
         self.dataset = dataset
         self.main_voice_index = main_voice_index
         self.note_embedding_dim = note_embedding_dim
@@ -60,7 +60,6 @@ class VoiceModel(nn.Module):
         self.dropout_lstm = dropout_lstm
         self.hidden_size_linear = hidden_size_linear
 
-        self.activate_cuda = torch.cuda.is_available()
         self.other_voices_indexes = [i
                                      for i
                                      in range(self.num_voices)
@@ -75,65 +74,49 @@ class VoiceModel(nn.Module):
              for num_metas in self.num_metas_per_voice]
         )
 
-        # self.lstm_left = nn.LSTM(input_size=note_embedding_dim * self.num_voices +
-        #                                     meta_embedding_dim * self.num_metas,
-        #                          hidden_size=lstm_hidden_size,
-        #                          num_layers=num_layers,
-        #                          dropout=dropout_lstm,
-        #                          batch_first=True)
-        # self.lstm_right = nn.LSTM(input_size=note_embedding_dim * self.num_voices +
-        #                                      meta_embedding_dim * self.num_metas,
-        #                           hidden_size=lstm_hidden_size,
-        #                           num_layers=num_layers,
-        #                           dropout=dropout_lstm,
-        #                           batch_first=True)
+        self.lstm_left = nn.LSTM(input_size=note_embedding_dim * self.num_voices +
+                                            meta_embedding_dim * self.num_metas,
+                                 hidden_size=lstm_hidden_size,
+                                 num_layers=num_layers,
+                                 dropout=dropout_lstm,
+                                 batch_first=True)
+        self.lstm_right = nn.LSTM(input_size=note_embedding_dim * self.num_voices +
+                                             meta_embedding_dim * self.num_metas,
+                                  hidden_size=lstm_hidden_size,
+                                  num_layers=num_layers,
+                                  dropout=dropout_lstm,
+                                  batch_first=True)
 
-        self.right_encoding = nn.Sequential(
-            nn.Linear(note_embedding_dim * self.num_voices +
-                      meta_embedding_dim * self.num_metas,
-                      hidden_size_linear),
-            nn.ReLU(),
-            nn.Linear(hidden_size_linear, note_embedding_dim * self.num_voices+meta_embedding_dim * self.num_metas)
-        )
+        # self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
 
-        self.left_encoding = nn.Sequential(
-            nn.Linear(note_embedding_dim * self.num_voices +
-                      meta_embedding_dim * self.num_metas,
-                      hidden_size_linear),
-            nn.ReLU(),
-            nn.Linear(hidden_size_linear, note_embedding_dim * self.num_voices+meta_embedding_dim * self.num_metas)
-        )
-
-        self.attn = attention.self_attn_monster(note_embedding_dim*self.num_voices+meta_embedding_dim*self.num_metas, nlayers=12)
-        if self.activate_cuda:
-            self.attn = self.attn.cuda()
-            # print(self.attn)
-            # exit()
-
-        self.attn_left = nn.Sequential(
-            nn.Linear((note_embedding_dim * (self.num_voices - 1)*2 + note_embedding_dim
-                       + (meta_embedding_dim * self.num_metas)*2),
-                      hidden_size_linear),
-            nn.ReLU(),
-            nn.Linear(hidden_size_linear, 1)
-        )
-
+        # ned*(2nv + 1)+med*nm*2 X ntsteps
+        # ksize = 
+        self.emb_size = (note_embedding_dim * (self.num_voices - 1)*2 + note_embedding_dim + (meta_embedding_dim * self.num_metas)*2)
+        # self.conv = nn.Sequential(
+        #     nn.Conv2d(1, 16, kernel_size=(11,3),padding=(5,1)), # 16 X 120 X 31,
+        #     nn.ReLU(),
+        #     nn.AvgPool2d((4,3), stride=2), # 16 X 59 X 15
+        #     nn.Conv2d(16, 32, kernel_size=(5,3), padding=(2,1)), # 32 X 59 X 15
+        #     nn.ReLU(),
+        #     nn.MaxPool2d((3, 3), stride=3),  # 32 X 19 X 5
+        #     nn.Conv2d(32, 64, kernel_size=(3,5)), # 64 X 17 X 1
+        #     nn.ReLU(),
+        #     # nn.AvgPool2d((4,3), stride=2), # 64 X 17 X 1
+        #     nn.Conv2d(64, 60, kernel_size=(5, 1), stride=(4, 1)), # 60 X 4 X 1
+        #     nn.ReLU(),
+        # )
         self.conv = get_c_kernel(self.num_voices+self.num_metas)
 
+        # self.conv_glob = nn.Sequential(
+        #     nn.Conv2d()
+        # )
 
-        self.attn_right = nn.Sequential(
+        self.attn = nn.Sequential(
             nn.Linear((note_embedding_dim * (self.num_voices - 1)*2 + note_embedding_dim
                        + (meta_embedding_dim * self.num_metas)*2),
                       hidden_size_linear),
             nn.ReLU(),
             nn.Linear(hidden_size_linear, 1)
-        )
-
-        self.pos_net = nn.Sequential(
-            nn.Linear(32, hidden_size_linear),
-            nn.ReLU(),
-            nn.Linear(hidden_size_linear, (note_embedding_dim * (self.num_voices) 
-                       + (meta_embedding_dim * self.num_metas)))   
         )
 
         self.mlp_center = nn.Sequential(
@@ -141,20 +124,17 @@ class VoiceModel(nn.Module):
                        + meta_embedding_dim * self.num_metas),
                       hidden_size_linear),
             nn.ReLU(),
-            nn.Linear(hidden_size_linear, (note_embedding_dim * (self.num_voices)
-                                           + (meta_embedding_dim * self.num_metas)))
+            nn.Linear(hidden_size_linear, (note_embedding_dim * (self.num_voices) 
+                       + (meta_embedding_dim * self.num_metas)))
         )
 
         self.mlp_predictions = nn.Sequential(
-            nn.Linear((note_embedding_dim * (self.num_voices)
+            nn.Linear((note_embedding_dim * (self.num_voices) 
                        + (meta_embedding_dim * self.num_metas)) * 4,
                       hidden_size_linear),
             nn.ReLU(),
-            nn.Linear(hidden_size_linear,
-                      self.num_notes_per_voice[main_voice_index])
+            nn.Linear(hidden_size_linear, self.num_notes_per_voice[main_voice_index])
         )
-
-
 
     def forward(self, *input):
         notes, metas = input
@@ -177,51 +157,58 @@ class VoiceModel(nn.Module):
                           for notes, metas in zip(notes_embedded, metas_embedded)]
 
         left, center, right = input_embedded
-        left = self.attn(left, 'l')
-        right = self.attn(right, 'r')
 
-        ###### Conv #######
-        bs = batch_size
-        zs = torch.zeros(bs, 1, self.note_embedding_dim *
-                         (self.num_voices+self.num_metas)).cuda()
+        # print("left.size(),right.size(),center.size(), self.num_voices, self.num_metas, self.note_embedding_dim, self.meta_embedding_dim")
+        # print(left.size(),right.size(),center.size(), self.num_voices, self.num_metas, self.note_embedding_dim, self.meta_embedding_dim)
+
+
+        ############## Attention ##############
+
+        # strip -> bs X ntsteps X ndim
+        bs=batch_size
+        zs = torch.zeros(bs, 1, self.note_embedding_dim*(self.num_voices+self.num_metas)).cuda()
         strip = torch.cat([left, zs, right], 1)
+        # center2 = torch.cat([center, torch.zeros(bs, 1, self.note_embedding_dim).cuda()], 2)
+        # sandwich = torch.cat([strip, center2.repeat(1, strip.size(1), 1)], 2).permute(0, 2, 1)
+        # ntsteps = sandwich.size(-1)
         ntsteps = left.size(1)+right.size(1)+1
-        strip2 = torch.reshape(
-            strip, (-1, self.num_voices+self.num_metas, self.note_embedding_dim, ntsteps))
-        conv_out = self.conv(strip2)
+        # print("ntsteps", ntsteps)
+        # sandwich = torch.reshape(sandwich, (-1, 1, strip.size(2), ntsteps))
+        # sandwich = torch.reshape(sandwich, (-1, 2, int(sandwich.size(1) // 2), ntsteps))
+        # -1 X 2 X 120 X 31
+        # bs X 2 X (ne*nv+me*nm) X (ntsteps=31)
+        # bs X (2*(ne*nv+me*nm))
+        # bs X (2*120)
+        # emb_size = (ne*nv+me*nm) # 120
+        strip2 = torch.reshape(strip, (-1, self.num_voices+self.num_metas, self.note_embedding_dim, ntsteps))
+        # conv_out = self.conv(sandwich).view(-1, 240)
+        # print("strip2", strip2.size())
+        conv_out = self.conv(strip2) # n*e X 3 X blah
+        # print("conv_out", conv_out.size())
         conv_out = torch.mean(conv_out, -1).view(-1, conv_out.size(1)*conv_out.size(2))
-        center = self.mlp_center(center)
-        center = center.view(-1, center.size(2))
+        # conv_out = self.conv(strip).view(-1, 240)
 
-        # # print(left.size(),right.size(),center.size(), self.num_voices)
-        # ############# Relative positional embeddings ##################
-        # center_pos = left.size()[1] # get the length of left values.
-        # rel_pos = torch.eye(32)
-        # if self.activate_cuda:
-        #     rel_pos = rel_pos.cuda()
-        # rel_pos[:,center_pos - 1] = -1
-        # positional_embeddings = self.pos_net(rel_pos)
-
-        # ############## Attention ##############
-
-        # left_inp = torch.cat([left,center.repeat(1,left.size()[1],1)],2) 
-        # left_weights = self.attn_left(left_inp)
+        # bs X 1 X cnt_size
+        # bs = batch_size
+        # center2 = torch.cat([center, torch.zeros(bs, 1, self.note_embedding_dim)], 2)
+        # # bs X (tsteps) X (emb_size)
+        # left_inp = torch.cat([left, center2.repeat(1, left.size()[1], 1)], 2)
+        # left_inp = left_inp.view(-1, 2, int(left_inp.size(2)//2))
+        # # left_inp = torch.cat([left, center.repeat(1, left.size()[1], 1)], 2)
+        # left_weights = self.attn(left_inp)
         # left_weights = nn.functional.softmax(left_weights,dim=0)
-        # left = self.left_encoding(left)
-        # left = left + positional_embeddings[:center_pos]
         # left_attn_value = (left_weights*left).sum(dim=1)
+        # # left_attn_value = self.convL(left_inp)
 
-
-        # right_inp = torch.cat([right,center.repeat(1,right.size()[1],1)],2) 
-        # right_weights = self.attn_right(right_inp)
+        # right_inp = torch.cat([right,center2.repeat(1,right.size()[1],1)],2) 
+        # right_weights = self.attn(right_inp)
         # right_weights = nn.functional.softmax(right_weights,dim=0)
-        # right = self.right_encoding(right)
-        # right = right + positional_embeddings[center_pos + 1:]
         # right_attn_value = (right_weights*right).sum(dim=1)
+        # # left_attn_value = self.convR(right_inp)
         # # print(right_attn_value.size())
         # # print(left_attn_value.size())
         # center = center.reshape(center.size()[0],center.size()[2])
-        # # exit()
+        # exit()
 
         
 
@@ -256,18 +243,23 @@ class VoiceModel(nn.Module):
 
         # concat and return prediction
 
-        # center = self.mlp_center(center)
+        center = self.mlp_center(center)
+        center = center.view(-1, center.size(2))
+        # print("center", center.size())
+        # exit()
         # left = left_attn_value
         # right = right_attn_value
+
         # print(center.size(),left.size(),right.size())
+        predictions = torch.cat([conv_out, center], 1)
         # predictions = torch.cat([
         #     left, center, right
         # ], 1)
-        predictions = torch.cat([conv_out, center], 1)
         # print(predictions.size())
         # exit()
         predictions = self.mlp_predictions(predictions)
-        # print(predictions,predictions.size())
+        # print(predictions.size())
+
         # exit()
 
         return predictions
@@ -317,21 +309,13 @@ class VoiceModel(nn.Module):
         return left_embedded, center_embedded, right_embedded
 
     def save(self):
-        # savefile = 'models/' + 'testing'
         torch.save(self.state_dict(), 'models/' + self.__repr__())
-        print(self.state_dict()['mlp_predictions.2.weight'].size())
-        # torch.save(self.state_dict(), savefile)
         print(f'Model {self.__repr__()} saved')
 
     def load(self):
-        # print('model    ','models/' + self.__repr__())
-        # savefile = 'models/' + 'testing'
-        # print('model    ',savefile)
         state_dict = torch.load('models/' + self.__repr__(),
                                 map_location=lambda storage, loc: storage)
-        print(f'Loading '+'models/' + self.__repr__())
-        # print(f'Loading {self.__repr__()}')
-        print(state_dict['mlp_predictions.2.weight'].size())
+        print(f'Loading {self.__repr__()}')
         self.load_state_dict(state_dict)
 
     def __repr__(self):
@@ -350,7 +334,6 @@ class VoiceModel(nn.Module):
                     batch_size=16,
                     num_epochs=10,
                     optimizer=None):
-        print(self.state_dict().keys())
         for epoch in range(num_epochs):
             print(f'===Epoch {epoch}===')
             (dataloader_train,
@@ -388,13 +371,13 @@ class VoiceModel(nn.Module):
             raise NotImplementedError
         print(len(dataloader))
         # exit()
-        # i=0
+        i=0
+        loss_function = torch.nn.CrossEntropyLoss()
         for tensor_chorale, tensor_metadata in dataloader:
             # print(i)
             # i=i+1
             # if(i==2):
-            #     break
-                # exit()
+            #     exit()
             # to Variable
             tensor_chorale = cuda_variable(tensor_chorale).long()
             tensor_metadata = cuda_variable(tensor_metadata).long()
@@ -406,10 +389,9 @@ class VoiceModel(nn.Module):
                                                         tensor_metadata)
 
             weights = self.forward(notes, metas)
-
-            loss_function = torch.nn.CrossEntropyLoss()
-            # print(weights.size(),label.size())
+            # print("conv:  wts{}\tlbl{}".format(weights.size(), label.size()))
             # exit()
+
             loss = loss_function(weights, label)
 
             if phase == 'train':

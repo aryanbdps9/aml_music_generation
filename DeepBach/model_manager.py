@@ -74,7 +74,7 @@ class DeepBach:
             voice_model = self.voice_models[main_voice_index]
             if self.activate_cuda:
                 voice_model.cuda()
-            optimizer = optim.Adam(voice_model.parameters())
+            optimizer = optim.Adam(voice_model.parameters(), lr=0.001)
             voice_model.train_model(optimizer=optimizer, **kwargs)
 
     def eval_phase(self):

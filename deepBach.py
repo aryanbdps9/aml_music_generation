@@ -3,6 +3,8 @@
 """
 
 import click
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 from DatasetManager.chorale_dataset import ChoraleDataset
 from DatasetManager.dataset_manager import DatasetManager
