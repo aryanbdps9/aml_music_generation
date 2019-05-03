@@ -109,10 +109,6 @@ class VoiceModel(nn.Module):
         self.conv = get_c_kernel(self.num_voices+self.num_metas)
         self.num_missing = 5
 
-        # self.conv_glob = nn.Sequential(
-        #     nn.Conv2d()
-        # )
-
         self.attn = nn.Sequential(
             nn.Linear((note_embedding_dim * (self.num_voices - 1)*2 + note_embedding_dim
                        + (meta_embedding_dim * self.num_metas)*2),
