@@ -15,18 +15,19 @@ from DeepBach.data_utils import reverse_tensor, mask_entry
 def get_c_kernel(n):
     # n X 64 X 32
     e = 64
+    activ_fn = nn.LeakyReLU()
     res = nn.Sequential(
         nn.Conv2d(n, 16, kernel_size=(5, 5)), # 16 X 60 X 28
-        nn.ReLU(),
+        activ_fn,
         nn.MaxPool2d((2, 2), stride=2), # 16 X 30 X 14
         nn.Conv2d(16, 32, kernel_size=(5, 5), padding=(1, 1)), # 32 X 28 X 12
-        nn.ReLU(),
+        activ_fn,
         nn.MaxPool2d((2, 2), stride=2), # 32 X 14 X 6
         nn.Conv2d(32, 64, kernel_size=(3, 3)), # 64 X 12 X 4
-        nn.ReLU(),
+        activ_fn,
         nn.MaxPool2d((2, 2), stride=1), # 64 X 11 X 3
         nn.Conv2d(64, n*e, kernel_size=(5, 3), stride=(3, 1)), # n*e X 3 X 1
-        nn.ReLU(),
+        activ_fn,
     )
     return res
 
@@ -189,70 +190,12 @@ class VoiceModel(nn.Module):
             choices = np.random.choice(ntsteps,size=num_change,replace=False).tolist()
             for choice in choices:
                 strip2[:, layer_id, :, choice] = torch.randn(batch_size, self.note_embedding_dim).cuda()
-        
-
 
         # conv_out = self.conv(sandwich).view(-1, 240)
         conv_out = self.conv(strip2) # n*e X 3 X blah
         # print("conv_out", conv_out.size())
         conv_out = torch.mean(conv_out, -1).view(-1, conv_out.size(1)*conv_out.size(2))
         
-        # conv_out = self.conv(strip).view(-1, 240)
-
-        # bs X 1 X cnt_size
-        # bs = batch_size
-        # center2 = torch.cat([center, torch.zeros(bs, 1, self.note_embedding_dim)], 2)
-        # # bs X (tsteps) X (emb_size)
-        # left_inp = torch.cat([left, center2.repeat(1, left.size()[1], 1)], 2)
-        # left_inp = left_inp.view(-1, 2, int(left_inp.size(2)//2))
-        # # left_inp = torch.cat([left, center.repeat(1, left.size()[1], 1)], 2)
-        # left_weights = self.attn(left_inp)
-        # left_weights = nn.functional.softmax(left_weights,dim=0)
-        # left_attn_value = (left_weights*left).sum(dim=1)
-        # # left_attn_value = self.convL(left_inp)
-
-        # right_inp = torch.cat([right,center2.repeat(1,right.size()[1],1)],2) 
-        # right_weights = self.attn(right_inp)
-        # right_weights = nn.functional.softmax(right_weights,dim=0)
-        # right_attn_value = (right_weights*right).sum(dim=1)
-        # # left_attn_value = self.convR(right_inp)
-        # # print(right_attn_value.size())
-        # # print(left_attn_value.size())
-        # center = center.reshape(center.size()[0],center.size()[2])
-        # exit()
-
-        
-
-
-        ##############
-
-        # main part
-        # hidden = init_hidden(
-        #     num_layers=self.num_layers,
-        #     batch_size=batch_size,
-        #     lstm_hidden_size=self.lstm_hidden_size,
-        # )
-        # left, hidden = self.lstm_left(left, hidden)
-        # left = left[:, -1, :]
-
-        # if self.num_voices == 1:
-        #     center = cuda_variable(torch.zeros(
-        #         batch_size,
-        #         self.lstm_hidden_size)
-        #     )
-        # else:
-        #     center = center[:, 0, :]  # remove time dimension
-        #     center = self.mlp_center(center)
-
-        # hidden = init_hidden(
-        #     num_layers=self.num_layers,
-        #     batch_size=batch_size,
-        #     lstm_hidden_size=self.lstm_hidden_size,
-        # )
-        # right, hidden = self.lstm_right(right, hidden)
-        # right = right[:, -1, :]
-
-        # concat and return prediction
 
         center = self.mlp_center(center)
         center = center.view(-1, center.size(2))

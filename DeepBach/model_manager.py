@@ -8,7 +8,9 @@ from DeepBach.helpers import cuda_variable, to_numpy
 
 from torch import optim, nn
 from tqdm import tqdm
-
+import matplotlib
+from matplotlib import pyplot as plt
+# plt.ion()
 from DeepBach.voice_model import VoiceModel
 
 
@@ -167,7 +169,9 @@ class DeepBach:
             start_tick=-timesteps_ticks,
             end_tick=sequence_length_ticks + timesteps_ticks
         )
-        print(tensor_chorale,tensor_chorale.size())
+        # torch.set_printoptions(profile="full")
+        # print(tensor_chorale,tensor_chorale.size())
+        # torch.set_printoptions(profile="default")
         # exit()
 
         tensor_metadata_padded = self.dataset.extract_metadata_with_padding(
@@ -183,10 +187,10 @@ class DeepBach:
             tensor_chorale[:, a:b] = self.dataset.random_score_tensor(
                 b - a)
 
-        if(given_data.min()<0):
-            tensor_chorale[given_data>=0] = given_data[given_data>=0]
-        else: 
-            given_data[:] = -1
+        # if(given_data.min()<0):
+        #     tensor_chorale[given_data>=0] = given_data[given_data>=0]
+        # else: 
+        #     given_data[:] = -1
 
         tensor_chorale = self.parallel_gibbs(
             tensor_chorale=tensor_chorale,
@@ -234,13 +238,32 @@ class DeepBach:
         to regenerate only the portion of the score between voice_index a and b
         :return: (num_voices, chorale_length) tensor
         """
+        print("parallel gibbs" + "#"*20)
+        print("voice_index_range", voice_index_range, "time_index_range_ticks", time_index_range_ticks)
+        print("num_iterations", num_iterations)
+        black_list = [24, 33]
+        allowed_list = [i for i in range(67) if i not in black_list]
+        print("allowed list", allowed_list)
         start_voice, end_voice = voice_index_range
         # add batch_dimension
         tensor_chorale = tensor_chorale.unsqueeze(0)
+
+        tensor_chorale_np = tensor_chorale.numpy()
+        replace_mat = np.isin(tensor_chorale_np, black_list)
+        nreplaced = np.sum(replace_mat)
+        replace_vals = np.random.choice(allowed_list, size=nreplaced, replace=True)
+        print("replace_vals", replace_vals)
+        tensor_chorale_np[replace_mat] = replace_vals
+        tensor_chorale = torch.tensor(tensor_chorale_np)
+        if self.activate_cuda:
+            tensor_chorale = tensor_chorale.cuda()
+
         given_data = given_data.unsqueeze(0)
         tensor_chorale_no_cuda = tensor_chorale.clone()
         tensor_metadata = tensor_metadata.unsqueeze(0)
+        torch.set_printoptions(profile="full")
         print(tensor_chorale_no_cuda)
+        torch.set_printoptions(profile="default")
         # exit()
         # to variable
         tensor_chorale = cuda_variable(tensor_chorale, volatile=True)
@@ -248,6 +271,7 @@ class DeepBach:
 
         min_temperature = temperature
         temperature = 1.1
+        # atsteps_ticks = []
 
         # Main loop
         for iteration in tqdm(range(num_iterations)):
@@ -267,6 +291,8 @@ class DeepBach:
                 for batch_index in range(batch_size_per_voice):
                     time_index_ticks = np.random.randint(
                         *time_index_range_ticks)
+                    # atsteps_ticks.append(time_index_ticks)
+                    # print("time_index_ticks", time_index_ticks)
                     time_indexes_ticks[voice_index].append(time_index_ticks)
 
                     notes, label = (self.voice_models[voice_index]
@@ -310,6 +336,8 @@ class DeepBach:
                     probas_pitch = probas[voice_index][batch_index]
 
                     probas_pitch = to_numpy(probas_pitch)
+                    probas_pitch[black_list]=0.0
+                    # probas_pitch[black_list] = 1e-10
 
                     # use temperature
                     probas_pitch = np.log(probas_pitch) / temperature
@@ -317,15 +345,26 @@ class DeepBach:
                         np.exp(probas_pitch)) - 1e-7
 
                     # pitch can include slur_symbol
+                    # print(probas_pitch)
+                    # probas_pitch[black_list]=0
+                    # print(probas_pitch)
+                    # exit()
+                    probas_pitch[probas_pitch<0]=0.0
                     pitch = np.argmax(np.random.multinomial(1, probas_pitch))
+                    # print(np.random.multinomial(1, probas_pitch))
+                    if int(pitch) not in black_list:
+                        tensor_chorale_no_cuda[
+                            0,
+                            voice_index,
+                            time_indexes_ticks[voice_index][batch_index]
+                        ] = int(pitch)
+                    # else:
+                    #     print(np.random.multinomial(1, probas_pitch))
+                    #     exit()
 
-                    tensor_chorale_no_cuda[
-                        0,
-                        voice_index,
-                        time_indexes_ticks[voice_index][batch_index]
-                    ] = int(pitch)
-            tensor_chorale_no_cuda[given_data>=0] = given_data[given_data>=0]
+            # tensor_chorale_no_cuda[given_data>=0] = given_data[given_data>=0]
             tensor_chorale = cuda_variable(tensor_chorale_no_cuda.clone(),
                                            volatile=True)
-
+        # plt.plot(atsteps_ticks)
+        # plt.show()
         return tensor_chorale_no_cuda[0, :, timesteps_ticks:-timesteps_ticks]
