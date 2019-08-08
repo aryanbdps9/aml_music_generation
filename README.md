@@ -118,7 +118,7 @@ regenerated this region using DeepBach.
 music21.converter.subConverters.SubConverterException: Cannot find a valid application path for format musicxml. Specify this in your Environment by calling environment.set(None, '/path/to/application')
 ```
 
-Either set it to MuseScore or similar (on a machine with GUI) to to a dummy command (on a server). See the installation section.
+Either set it to MuseScore or similar (on a machine with GUI) to to a dummy command (on a server). See the installation section.  
 
 # Citing
 
